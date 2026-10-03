@@ -1,7 +1,8 @@
 'use client'
 
 import useSWR from 'swr'
-import { Mountain } from 'lucide-react'
+import Link from 'next/link'
+import { Mountain, PlayCircle } from 'lucide-react'
 import { fetcher, type Health } from '@/lib/glacier'
 import { cn } from '@/lib/utils'
 
@@ -20,6 +21,13 @@ export function SiteHeader() {
             <h1 className="text-base font-semibold leading-tight text-balance">GlacierGuard</h1>
             <p className="text-xs text-muted-foreground">GLOF early warning · Nepal · India · Bhutan</p>
           </div>
+          <Link
+            href="/explainer"
+            className="ml-2 flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs hover:bg-accent"
+          >
+            <PlayCircle className="size-3.5 text-primary" aria-hidden="true" />
+            Watch 90s explainer
+          </Link>
         </div>
 
         <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs sm:grid-cols-4">
