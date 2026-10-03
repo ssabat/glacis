@@ -42,6 +42,7 @@ export interface Health {
   model: string
   provider: string
   live: boolean
+  search: boolean
   price_in_per_m: number
   price_out_per_m: number
   max_out_tokens: number
@@ -64,6 +65,13 @@ export interface AnalyzeResponse {
   cached: boolean
   estimated?: boolean
   error?: string
+  intel?: Intel | null
+}
+
+export interface Intel {
+  digest: string
+  sources: { title: string; url: string }[]
+  error?: string
 }
 
 export const fetcher = async <T>(url: string): Promise<T> => {
@@ -74,7 +82,7 @@ export const fetcher = async <T>(url: string): Promise<T> => {
 
 export async function analyzeLake(
   url: string,
-  { arg }: { arg: { scenario: Scenario; attach_image: boolean } },
+  { arg }: { arg: { scenario: Scenario; attach_image: boolean; use_search: boolean } },
 ): Promise<AnalyzeResponse> {
   const res = await fetch(url, {
     method: 'POST',

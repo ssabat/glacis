@@ -1,4 +1,4 @@
-import { AlertTriangle, Coins, Cpu, Loader2, Siren, Timer } from 'lucide-react'
+import { AlertTriangle, Coins, Cpu, Globe, Loader2, Siren, Timer } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { RISK_STYLES, type AnalyzeResponse, type Lake, type Scenario } from '@/lib/glacier'
@@ -23,6 +23,8 @@ export function AnalysisPanel({
   onScenarioChange,
   attachImage,
   onAttachImageChange,
+  useSearch,
+  onUseSearchChange,
   onRun,
   running,
   result,
@@ -33,6 +35,8 @@ export function AnalysisPanel({
   onScenarioChange: (s: Scenario) => void
   attachImage: boolean
   onAttachImageChange: (v: boolean) => void
+  useSearch: boolean
+  onUseSearchChange: (v: boolean) => void
   onRun: () => void
   running: boolean
   result?: AnalyzeResponse
@@ -88,6 +92,21 @@ export function AnalysisPanel({
           </span>
         </label>
 
+        <label className="mt-3 flex items-start gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={useSearch}
+            onChange={(e) => onUseSearchChange(e.target.checked)}
+            className="mt-0.5 accent-[var(--primary)]"
+          />
+          <span>
+            Add live web intel (Tavily)
+            <span className="block text-muted-foreground">
+              Adds ~60 tokens of recent reports, cached per lake for 6h.
+            </span>
+          </span>
+        </label>
+
         <Button className="mt-4 w-full" size="lg" onClick={onRun} disabled={running}>
           {running ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Cpu aria-hidden="true" />}
           {running ? 'Analyzing…' : `Analyze ${lake.name}`}
@@ -135,6 +154,32 @@ export function AnalysisPanel({
                 <li key={a}>{a}</li>
               ))}
             </ol>
+
+            {result.intel && result.intel.sources.length > 0 && (
+              <>
+                <h3 className="mt-4 flex items-center gap-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <Globe className="size-3" aria-hidden="true" />
+                  Web intel
+                </h3>
+                <ul className="mt-1 flex flex-col gap-1 text-xs">
+                  {result.intel.sources.map((src) => (
+                    <li key={src.url} className="truncate">
+                      <a
+                        href={src.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary underline-offset-2 hover:underline"
+                      >
+                        {src.title || src.url}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {result.intel?.error && (
+              <p className="mt-3 text-xs text-risk-high">Web search unavailable: {result.intel.error}</p>
+            )}
 
             {result.error && (
               <p className="mt-3 text-xs text-risk-high">Upstream error, used fallback: {result.error}</p>

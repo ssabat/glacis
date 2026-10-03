@@ -72,13 +72,59 @@ SYSTEM_PROMPT = (
     '"actions":[max 3 short],"evac_h":hours_to_evacuate_or_null}'
 )
 
+TAVILY_URL = "https://api.tavily.com/search"
+INTEL_TTL_S = 6 * 3600
+INTEL_MAX_CHARS = 240
+
 _cache: dict[str, dict] = {}
-_session = {"calls": 0, "cache_hits": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+_intel_cache: dict[str, tuple[float, dict]] = {}
+_session = {"calls": 0, "cache_hits": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "searches": 0}
 
 
 class AnalyzeRequest(BaseModel):
     scenario: Literal["baseline", "cloudburst", "earthquake", "heatwave"] = "baseline"
     attach_image: bool = False
+    use_search: bool = False
+
+
+def _tavily_key() -> str | None:
+    return os.getenv("TAVILY_API_KEY") or os.getenv("TAVILY_KEY")
+
+
+def fetch_intel(lake_id: str, lake: dict) -> dict | None:
+    """Recent field intel via Tavily, squeezed to ~60 tokens and cached per lake to avoid repeat spend."""
+    api_key = _tavily_key()
+    if not api_key:
+        return None
+    hit = _intel_cache.get(lake_id)
+    if hit and time.time() - hit[0] < INTEL_TTL_S:
+        return hit[1]
+
+    payload = {
+        "query": f"{lake['name']} glacial lake {lake['country']} GLOF flood risk",
+        "topic": "general", "search_depth": "basic", "max_results": 3,
+        "time_range": "year", "include_answer": False,
+    }
+    req = urllib.request.Request(
+        TAVILY_URL, data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as res:
+            data = json.loads(res.read())
+    except Exception as err:  # noqa: BLE001 - search is optional context, never block analysis
+        return {"digest": "", "sources": [], "error": str(err)[:120]}
+
+    results = data.get("results", [])[:3]
+    per_item = INTEL_MAX_CHARS // max(len(results), 1)
+    snippets = [re.sub(r"\s+", " ", r.get("content", "")).strip()[:per_item] for r in results]
+    intel = {
+        "digest": " | ".join(s for s in snippets if s),
+        "sources": [{"title": r.get("title", "")[:90], "url": r.get("url", "")} for r in results],
+    }
+    _session["searches"] += 1
+    _intel_cache[lake_id] = (time.time(), intel)
+    return intel
 
 
 def _sensors(lake: dict, scenario: str) -> dict:
@@ -121,14 +167,15 @@ def heuristic(lake: dict, s: dict) -> dict:
     }
 
 
-def compact_prompt(lake: dict, s: dict) -> str:
+def compact_prompt(lake: dict, s: dict, intel: str = "") -> str:
     areas = ",".join(f"{a:g}" for a in lake["area_km2"])
-    return (
+    prompt = (
         f"{lake['name']} {lake['cc']} {lake['elev_m']}m dam:{lake['dam']} pop:{lake['downstream_pop']} "
         f"d:{lake['distance_km']}km A(km2,2015-25):{areas} dT:+{s['temp_anom_c']}C "
         f"rain72:{s['rain_72h_mm']}mm lvl24:+{s['level_24h_cm']}cm seep:{s['seepage']} "
         f"seis:M{s['seismic_m']} vis:{';'.join(lake['visual'])}"
     )
+    return f"{prompt} news:{intel}" if intel else prompt
 
 
 def _image_data_url(lake_id: str) -> str | None:
@@ -168,8 +215,7 @@ def _parse_json(text: str) -> dict | None:
     }
 
 
-def call_nemotron(lake_id: str, lake: dict, s: dict, attach_image: bool, api_key: str) -> dict:
-    text = compact_prompt(lake, s)
+def call_nemotron(lake_id: str, text: str, attach_image: bool, api_key: str) -> dict:
     content: list | str = text
     image_url = _image_data_url(lake_id) if attach_image else None
     if image_url:
@@ -222,7 +268,7 @@ def _summary(lake_id: str, lake: dict) -> dict:
 @app.get("/api/py/health")
 def health():
     return {"model": MODEL, "provider": "Nebius Token Factory", "live": bool(os.getenv("NEBIUS_API_KEY")),
-            "price_in_per_m": PRICE_IN, "price_out_per_m": PRICE_OUT, "max_out_tokens": MAX_OUT_TOKENS,
+            "search": bool(_tavily_key()), "price_in_per_m": PRICE_IN, "price_out_per_m": PRICE_OUT, "max_out_tokens": MAX_OUT_TOKENS,
             "session": _session}
 
 
@@ -237,7 +283,8 @@ def analyze(lake_id: str, body: AnalyzeRequest):
     if not lake:
         raise HTTPException(404, "Unknown lake")
     s = _sensors(lake, body.scenario)
-    prompt = compact_prompt(lake, s)
+    intel = fetch_intel(lake_id, lake) if body.use_search else None
+    prompt = compact_prompt(lake, s, intel["digest"] if intel else "")
     key = hashlib.sha1(f"{MODEL}|{prompt}|{body.attach_image}".encode()).hexdigest()
 
     if key in _cache:
@@ -245,11 +292,12 @@ def analyze(lake_id: str, body: AnalyzeRequest):
         return {**_cache[key], "cached": True, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "latency_ms": 0}
 
     api_key = os.getenv("NEBIUS_API_KEY")
-    response = {"lake_id": lake_id, "scenario": body.scenario, "sensors": s, "prompt": prompt, "model": MODEL}
+    response = {"lake_id": lake_id, "scenario": body.scenario, "sensors": s, "prompt": prompt, "model": MODEL,
+                "intel": intel}
 
     if api_key:
         try:
-            out = call_nemotron(lake_id, lake, s, body.attach_image, api_key)
+            out = call_nemotron(lake_id, prompt, body.attach_image, api_key)
             cost = (out["tokens_in"] * PRICE_IN + out["tokens_out"] * PRICE_OUT) / 1_000_000
             _session["calls"] += 1
             _session["tokens_in"] += out["tokens_in"]

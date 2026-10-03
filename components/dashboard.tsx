@@ -14,6 +14,7 @@ export function Dashboard() {
   const [selectedId, setSelectedId] = useState<string>()
   const [scenario, setScenario] = useState<Scenario>('baseline')
   const [attachImage, setAttachImage] = useState(false)
+  const [useSearch, setUseSearch] = useState(false)
   const [results, setResults] = useState<Record<string, AnalyzeResponse>>({})
 
   const lake = lakes?.find((l) => l.id === selectedId) ?? lakes?.[0]
@@ -40,12 +41,12 @@ export function Dashboard() {
     )
   }
 
-  const resultKey = `${lake.id}:${scenario}:${attachImage}`
+  const resultKey = `${lake.id}:${scenario}:${attachImage}:${useSearch}`
   const result = results[resultKey]
   const sensors = result?.sensors ?? lake.sensors
 
   const run = async () => {
-    const res = await trigger({ scenario, attach_image: attachImage })
+    const res = await trigger({ scenario, attach_image: attachImage, use_search: useSearch })
     setResults((prev) => ({ ...prev, [resultKey]: res }))
     mutate('/api/py/health')
   }
@@ -60,6 +61,8 @@ export function Dashboard() {
         onScenarioChange={setScenario}
         attachImage={attachImage}
         onAttachImageChange={setAttachImage}
+        useSearch={useSearch}
+        onUseSearchChange={setUseSearch}
         onRun={run}
         running={isMutating}
         result={result}
